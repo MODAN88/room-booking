@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import './App.css';
 
@@ -9,17 +9,19 @@ interface Room {
   location: string;
   capacity: number;
   emoji: string;
+  country: string;
 }
 
-const ROOMS: Room[] = [
-  { id: '00000000-0000-0000-0000-000000000001', name: 'King Suite', price: 350, location: 'Tel Aviv', capacity: 2, emoji: '👑' },
-  { id: '00000000-0000-0000-0000-000000000002', name: 'Studio', price: 150, location: 'Haifa', capacity: 1, emoji: '🏢' },
-  { id: '00000000-0000-0000-0000-000000000003', name: 'Beachfront Luxury', price: 550, location: 'Tel Aviv', capacity: 4, emoji: '🏖️' },
-  { id: '00000000-0000-0000-0000-000000000004', name: 'Modern Apartment', price: 220, location: 'Jerusalem', capacity: 3, emoji: '🏢' },
-  { id: '00000000-0000-0000-0000-000000000005', name: 'Garden Villa', price: 400, location: 'Jaffa', capacity: 5, emoji: '🏡' },
-  { id: '00000000-0000-0000-0000-000000000006', name: 'City Center Suite', price: 280, location: 'Tel Aviv', capacity: 2, emoji: '🏙️' },
-  { id: '00000000-0000-0000-0000-000000000007', name: 'Boutique Hotel', price: 190, location: 'Haifa', capacity: 2, emoji: '✨' }
-];
+interface Booking {
+  id: string;
+  room_id: string;
+  start_date: string;
+  end_date: string;
+  status: string;
+  created_at?: string;
+  room_name?: string;
+  location?: string;
+}
 
 const API_BASE_URL = 'http://localhost:3000';
 
@@ -28,12 +30,51 @@ interface BookingStatus {
   message: string;
 }
 
-const RoomBookingApp: React.FC = () => {
-  const [view, setView] = useState<'rooms' | 'booking'>('rooms');
-  const [selectedRoom, setSelectedRoom] = useState<Room>(ROOMS[0]);
+const RoomBookingApp = () => {
+  const [view, setView] = useState<'rooms' | 'booking' | 'reservations'>('rooms');
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
+  const [selectedCountry, setSelectedCountry] = useState<string>('All');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [bookingStatus, setBookingStatus] = useState<BookingStatus>({ status: 'IDLE', message: '' });
+
+  useEffect(() => {
+    // fetch rooms from backend
+    const load = async () => {
+      try {
+        const res = await axios.get(`${API_BASE_URL}/api/v1/rooms`);
+        const data = res.data;
+        // support either { rooms: [...] } or raw array
+        setRooms(Array.isArray(data) ? data : data.rooms || []);
+        if ((Array.isArray(data) ? data : data.rooms || []).length > 0) {
+          setSelectedRoom((Array.isArray(data) ? data : data.rooms || [])[0]);
+        }
+      } catch (err) {
+        console.warn('Failed loading rooms', err);
+      }
+    };
+    load();
+  }, []);
+
+  const fetchBookings = async () => {
+    try {
+      const res = await axios.get(`${API_BASE_URL}/api/v1/bookings`);
+      const data = res.data;
+      setBookings(Array.isArray(data) ? data : data.bookings || []);
+    } catch (err) {
+      console.warn('Failed loading bookings', err);
+    }
+  };
+
+  // Helper: ISO date (yyyy-mm-dd)
+  const toISODate = (d: Date) => d.toISOString().split('T')[0];
+  const today = new Date();
+  const tomorrow = new Date(today);
+  tomorrow.setDate(today.getDate() + 1);
+  const minStart = toISODate(tomorrow);
+  const minEnd = startDate ? toISODate(new Date(new Date(startDate).getTime() + 24 * 60 * 60 * 1000)) : toISODate(new Date(tomorrow.getTime() + 24 * 60 * 60 * 1000));
 
   const handleRoomSelect = (room: Room) => {
     setSelectedRoom(room);
@@ -42,6 +83,9 @@ const RoomBookingApp: React.FC = () => {
     setEndDate('');
     setBookingStatus({ status: 'IDLE', message: '' });
   };
+
+  const countries = ['All', ...Array.from(new Set(rooms.map(r => r.country)))];
+  const filteredRooms = selectedCountry === 'All' ? rooms : rooms.filter(r => r.country === selectedCountry);
 
   const handleBooking = async () => {
     setBookingStatus({ status: 'LOADING', message: '' });
@@ -93,12 +137,26 @@ const RoomBookingApp: React.FC = () => {
 
       {view === 'rooms' ? (
         <div className="rooms-view">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <h2 style={{ color: 'white' }}>Available Rooms</h2>
+            <div style={{ display: 'flex', gap: 12 }}>
+              <div>
+                <label style={{ color: 'white', marginRight: 10, fontWeight: 600 }}>Country:</label>
+                <select value={selectedCountry} onChange={(e: any) => setSelectedCountry(e.target.value)} style={{ padding: '8px', borderRadius: 6 }}>
+                  {countries.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div>
+                <button onClick={() => { setView('reservations'); fetchBookings(); }} style={{ padding: '8px 12px', borderRadius: 6 }}>Show Reservations</button>
+              </div>
+            </div>
+          </div>
           <div className="rooms-grid">
-            {ROOMS.map(room => (
+            {filteredRooms.map(room => (
               <div key={room.id} className="room-card" onClick={() => handleRoomSelect(room)}>
                 <div className="room-emoji">{room.emoji}</div>
                 <h3>{room.name}</h3>
-                <p className="location">📍 {room.location}</p>
+                <p className="location">📍 {room.location} — {room.country}</p>
                 <p className="capacity">👥 {room.capacity} {room.capacity === 1 ? 'guest' : 'guests'}</p>
                 <div className="price-section">
                   <span className="price">${room.price}</span>
@@ -109,22 +167,22 @@ const RoomBookingApp: React.FC = () => {
             ))}
           </div>
         </div>
-      ) : (
+      ) : view === 'booking' ? (
         <div className="booking-view">
           <button className="back-btn" onClick={() => setView('rooms')}>← Back to Rooms</button>
-          
+
           <div className="booking-card">
             <div className="selected-room">
               <div className="room-header">
-                <span className="room-emoji-large">{selectedRoom.emoji}</span>
+                <span className="room-emoji-large">{selectedRoom?.emoji}</span>
                 <div className="room-info">
-                  <h2>{selectedRoom.name}</h2>
-                  <p className="location">📍 {selectedRoom.location}</p>
+                  <h2>{selectedRoom?.name}</h2>
+                  <p className="location">📍 {selectedRoom?.location}</p>
                 </div>
               </div>
               <div className="room-details">
-                <span className="detail">👥 {selectedRoom.capacity} {selectedRoom.capacity === 1 ? 'guest' : 'guests'}</span>
-                <span className="detail price-highlight">${selectedRoom.price}/night</span>
+                <span className="detail">👥 {selectedRoom?.capacity} {selectedRoom?.capacity === 1 ? 'guest' : 'guests'}</span>
+                <span className="detail price-highlight">${selectedRoom?.price}/night</span>
               </div>
             </div>
 
@@ -136,6 +194,7 @@ const RoomBookingApp: React.FC = () => {
                   type="date"
                   value={startDate}
                   onChange={e => setStartDate(e.target.value)}
+                  min={minStart}
                   className="date-input"
                 />
               </div>
@@ -147,15 +206,18 @@ const RoomBookingApp: React.FC = () => {
                   type="date"
                   value={endDate}
                   onChange={e => setEndDate(e.target.value)}
+                  min={minEnd}
                   className="date-input"
                 />
               </div>
+
+              <p style={{ fontSize: '0.9em', color: '#555' }}>Bookings are only allowed for future dates. A confirmation email will be sent after successful booking (if configured).</p>
 
               {startDate && endDate && new Date(endDate) > new Date(startDate) && (
                 <div className="nights-info">
                   {Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24))} nights 
                   <span className="total-price">
-                    = ${selectedRoom.price * Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24))}
+                    = ${Number(selectedRoom?.price || 0) * Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24))}
                   </span>
                 </div>
               )}
@@ -179,6 +241,26 @@ const RoomBookingApp: React.FC = () => {
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      ) : (
+        <div className="reservations-view">
+          <button className="back-btn" onClick={() => setView('rooms')}>← Back to Rooms</button>
+          <h2 style={{ color: 'white', marginTop: 12 }}>Reservations</h2>
+          <div style={{ marginTop: 12 }}>
+            {bookings.length === 0 ? (
+              <p style={{ color: '#ddd' }}>No reservations found.</p>
+            ) : (
+              <div className="bookings-list">
+                {bookings.map(b => (
+                  <div key={b.id} className="booking-row">
+                    <div><strong>{b.room_name || b.room_id}</strong> — {b.location}</div>
+                    <div>{new Date(b.start_date).toLocaleDateString()} → {new Date(b.end_date).toLocaleDateString()}</div>
+                    <div>Status: {b.status}</div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
