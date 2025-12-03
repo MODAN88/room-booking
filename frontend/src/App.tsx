@@ -15,6 +15,19 @@ const RoomBookingApp: React.FC = () => {
     setStatus('LOADING');
     setMessage('');
 
+    // Validate dates
+    if (startDate === endDate) {
+      setStatus('ERROR');
+      setMessage('Check-out date must be after check-in date');
+      return;
+    }
+
+    if (new Date(endDate) <= new Date(startDate)) {
+      setStatus('ERROR');
+      setMessage('Check-out date must be after check-in date');
+      return;
+    }
+
     try {
       // API Call to Backend
       await axios.post(`${API_BASE_URL}/api/v1/bookings`, {
@@ -33,6 +46,10 @@ const RoomBookingApp: React.FC = () => {
         // Handles the Concurrency failure (Double Booking)
         setStatus('CONFLICT');
         setMessage('Error: This room was just booked by another user. Please choose different dates or a different room.');
+      } else if (error.response && error.response.status === 400) {
+        // Handle bad request (validation errors)
+        setStatus('ERROR');
+        setMessage(error.response.data?.error || 'Invalid booking request');
       } else {
         setStatus('ERROR');
         setMessage(`An error occurred: ${error.message}`);
@@ -53,8 +70,8 @@ const RoomBookingApp: React.FC = () => {
       
       <button 
         onClick={handleBooking} 
-        disabled={status === 'LOADING' || !startDate || !endDate}
-        style={{ padding: '10px', backgroundColor: status === 'LOADING' ? '#ccc' : (status === 'CONFLICT' ? 'orange' : 'green'), color: 'white', border: 'none', cursor: 'pointer' }}
+        disabled={status === 'LOADING' || !startDate || !endDate || new Date(endDate) <= new Date(startDate)}
+        style={{ padding: '10px', backgroundColor: (status === 'LOADING' || new Date(endDate) <= new Date(startDate)) ? '#ccc' : (status === 'CONFLICT' ? 'orange' : 'green'), color: 'white', border: 'none', cursor: 'pointer' }}
       >
         {status === 'LOADING' ? 'Processing...' : 'Book Now'}
       </button>

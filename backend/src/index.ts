@@ -39,6 +39,14 @@ app.post('/api/v1/bookings', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
+    // Validate that check-out is after check-in
+    const checkInDate = new Date(startDate);
+    const checkOutDate = new Date(endDate);
+    
+    if (checkOutDate <= checkInDate) {
+      return res.status(400).json({ error: 'Check-out date must be after check-in date' });
+    }
+
     res.json({ message: 'Booking created', roomId, startDate, endDate });
   } catch (error) {
     res.status(500).json({ error: 'Internal server error' });
