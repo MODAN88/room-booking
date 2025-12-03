@@ -1,8 +1,20 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import { Pool } from 'pg';
 
 const app = express();
 app.use(express.json());
+
+// CORS middleware
+app.use((req: Request, res: Response, next: NextFunction) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
 
 // PostgreSQL connection
 const pgPool = new Pool({
@@ -14,12 +26,12 @@ const pgPool = new Pool({
 });
 
 // Health check endpoint
-app.get('/health', (req, res) => {
+app.get('/health', (req: Request, res: Response) => {
   res.json({ status: 'OK' });
 });
 
 // Booking endpoint (placeholder)
-app.post('/api/v1/bookings', async (req, res) => {
+app.post('/api/v1/bookings', async (req: Request, res: Response) => {
   try {
     const { roomId, startDate, endDate } = req.body;
     

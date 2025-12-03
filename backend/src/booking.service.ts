@@ -1,4 +1,4 @@
-import { Pool, Client } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { RedisClientType, createClient } from 'redis';
 
 // DB Configuration from Docker Compose environment variables
@@ -23,9 +23,10 @@ export class BookingService {
    * @throws {Error} ROOM_ALREADY_BOOKED if dates clash.
    */
   async createBooking(userId: string, roomId: string, startDate: string, endDate: string) {
-    let client: Client | null = null;
+    const client: PoolClient | null = await pool.connect();
     try {
-      client = await pool.connect();
+      if (!client) throw new Error('Failed to connect to database');
+      
       // 1. Begin Transaction
       await client.query('BEGIN');
 
@@ -41,7 +42,7 @@ export class BookingService {
       
       const conflictResult = await client.query(checkQuery, [roomId, endDate, startDate]);
 
-      if (conflictResult.rowCount > 0) {
+      if (conflictResult && conflictResult.rowCount && conflictResult.rowCount > 0) {
         // Conflict found - throw error, which triggers ROLLBACK
         throw new Error("ROOM_ALREADY_BOOKED"); 
       }
@@ -85,7 +86,6 @@ export class BookingService {
     // 1. Check Cache
     const cachedResult = await redisClient.get(cacheKey);
     if (cachedResult) {
-        // console.log("Serving from cache");
         return JSON.parse(cachedResult);
     }
 
