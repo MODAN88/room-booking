@@ -30,8 +30,9 @@ app.get('/health', (req: Request, res: Response) => {
   res.json({ status: 'OK' });
 });
 
-// Booking endpoint (placeholder)
+// Booking endpoint with database persistence and conflict detection
 app.post('/api/v1/bookings', async (req: Request, res: Response) => {
+  const client = await pgPool.connect();
   try {
     const { roomId, startDate, endDate } = req.body;
     
@@ -47,9 +48,52 @@ app.post('/api/v1/bookings', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Check-out date must be after check-in date' });
     }
 
-    res.json({ message: 'Booking created', roomId, startDate, endDate });
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
+    // Start transaction
+    await client.query('BEGIN');
+
+    // Check for overlapping bookings with row-level lock (pessimistic locking)
+    // Overlap condition: (startA < endB) AND (endA > startB)
+    const conflictQuery = `
+      SELECT id FROM bookings 
+      WHERE room_id = $1 
+      AND start_date < $2 
+      AND end_date > $3
+      FOR UPDATE;
+    `;
+    
+    const conflictResult = await client.query(conflictQuery, [roomId, endDate, startDate]);
+    
+    if (conflictResult.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Room is already booked for these dates' });
+    }
+
+    // Insert the new booking
+    const insertQuery = `
+      INSERT INTO bookings (user_id, room_id, start_date, end_date, status)
+      VALUES ($1, $2, $3, $4, 'CONFIRMED')
+      RETURNING id, room_id, start_date, end_date, status, created_at;
+    `;
+    
+    // Use test user ID
+    const testUserId = 'a1b2c3d4-e5f6-7890-1234-567890abcdef';
+    
+    const result = await client.query(insertQuery, [testUserId, roomId, startDate, endDate]);
+
+    // Commit transaction
+    await client.query('COMMIT');
+    
+    return res.status(201).json({ 
+      message: 'Booking created successfully', 
+      booking: result.rows[0] 
+    });
+
+  } catch (error: any) {
+    await client.query('ROLLBACK');
+    console.error('Booking error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    client.release();
   }
 });
 
