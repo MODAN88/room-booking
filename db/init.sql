@@ -33,11 +33,16 @@ CREATE TABLE IF NOT EXISTS bookings (
 -- Critical composite index for availability check and concurrency handling
 CREATE INDEX idx_bookings_room_dates ON bookings (room_id, start_date, end_date);
 
--- Seed Data: test user and two rooms
+-- Seed Data: test user and multiple rooms
 INSERT INTO users (id, email, password_hash) 
 VALUES ('a1b2c3d4-e5f6-7890-1234-567890abcdef', 'test@example.com', 'hashedpassword');
 
 INSERT INTO rooms (id, name, price_per_night, capacity, location) 
 VALUES 
-    ('00000000-0000-0000-0000-000000000001', 'King Suite Tel Aviv', 350.00, 2, 'Tel Aviv'),
-    ('00000000-0000-0000-0000-000000000002', 'Studio Haifa', 150.00, 1, 'Haifa');
+    ('00000000-0000-0000-0000-000000000001', 'King Suite', 350.00, 2, 'Tel Aviv'),
+    ('00000000-0000-0000-0000-000000000002', 'Studio', 150.00, 1, 'Haifa'),
+    ('00000000-0000-0000-0000-000000000003', 'Beachfront Luxury', 550.00, 4, 'Tel Aviv'),
+    ('00000000-0000-0000-0000-000000000004', 'Modern Apartment', 220.00, 3, 'Jerusalem'),
+    ('00000000-0000-0000-0000-000000000005', 'Garden Villa', 400.00, 5, 'Jaffa'),
+    ('00000000-0000-0000-0000-000000000006', 'City Center Suite', 280.00, 2, 'Tel Aviv'),
+    ('00000000-0000-0000-0000-000000000007', 'Boutique Hotel', 190.00, 2, 'Haifa');
