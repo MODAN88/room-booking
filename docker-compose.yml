@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  # 1. Database Service (PostgreSQL)
+  db:
+    image: postgres:15-alpine
+    container_name: booking_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: securePassword
+      POSTGRES_DB: booking_platform
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Load initial schema and seed data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d booking_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. Cache Service (Redis)
+  cache:
+    image: redis:alpine
+    container_name: booking_cache
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  # 3. Backend Service (Node.js API)
+  backend:
+    build: ./backend
+    container_name: booking_backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # DB connection details using the service name 'db' in the Docker network
+      DB_HOST: db
+      DB_USER: admin
+      DB_PASS: securePassword
+      DB_NAME: booking_platform
+      REDIS_HOST: cache
+      PORT: 3000
+    depends_on:
+      - db
+      - cache
+
+  # 4. Frontend Service (React UI)
+  frontend:
+    build: ./frontend
+    container_name: booking_frontend
+    restart: unless-stopped
+    # UI will be available on http://localhost:8080
+    ports:
+      - "8080:80" 
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
