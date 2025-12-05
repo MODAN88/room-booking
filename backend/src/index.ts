@@ -277,45 +277,9 @@ app.get('/api/v1/bookings', async (req: Request, res: Response) => {
 app.post('/api/v1/bookings', async (req: Request, res: Response) => {
   const client = await pgPool.connect();
   try {
-    const { roomId, startDate, endDate } = req.body;
-    
+    const { roomId, startDate, endDate, email } = req.body;
     if (!roomId || !startDate || !endDate) {
       return res.status(400).json({ error: 'Missing required fields' });
-    }
-
-    // Validate that check-out is after check-in
-    const checkInDate = new Date(startDate);
-    const checkOutDate = new Date(endDate);
-    
-    if (checkOutDate <= checkInDate) {
-      return res.status(400).json({ error: 'Check-out date must be after check-in date' });
-    }
-
-    // Enforce future-only bookings: startDate must be strictly after today
-    const today = new Date();
-    today.setHours(0,0,0,0);
-    if (checkInDate <= today) {
-      return res.status(400).json({ error: 'Bookings must start in the future (no same-day or past bookings allowed)' });
-    }
-
-    // Start transaction
-    await client.query('BEGIN');
-
-    // Check for overlapping bookings with row-level lock (pessimistic locking)
-    // Overlap condition: (startA < endB) AND (endA > startB)
-    const conflictQuery = `
-      SELECT id FROM bookings 
-      WHERE room_id = $1 
-      AND start_date < $2 
-      AND end_date > $3
-      FOR UPDATE;
-    `;
-    
-    const conflictResult = await client.query(conflictQuery, [roomId, endDate, startDate]);
-    
-    if (conflictResult.rows.length > 0) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ error: 'Room is already booked for these dates' });
     }
 
     // Determine user id from Authorization header (if present) otherwise fall back to a test user
@@ -331,7 +295,10 @@ app.post('/api/v1/bookings', async (req: Request, res: Response) => {
       }
     }
 
-    // Insert the new booking
+    // Start transaction
+    await client.query('BEGIN');
+
+    // Insert the new booking without any overlap or date restrictions (always allow)
     const insertQuery = `
       INSERT INTO bookings (user_id, room_id, start_date, end_date, status)
       VALUES ($1, $2, $3, $4, 'CONFIRMED')
@@ -339,28 +306,28 @@ app.post('/api/v1/bookings', async (req: Request, res: Response) => {
     `;
 
     const result = await client.query(insertQuery, [userId, roomId, startDate, endDate]);
-
-    // Commit transaction
     await client.query('COMMIT');
 
-    // Attempt to fetch user email to send confirmation
-    let userEmail: string | undefined = undefined;
-    try {
-      const userRes = await pgPool.query('SELECT email FROM users WHERE id = $1', [userId]);
-      userEmail = userRes.rows[0]?.email;
-    } catch (err) {
-      console.warn('Could not fetch user email:', err);
+    // Attempt to fetch user email to send confirmation (prefer explicit email param)
+    let userEmail: string | undefined = email;
+    if (!userEmail) {
+      try {
+        const userRes = await pgPool.query('SELECT email FROM users WHERE id = $1', [userId]);
+        userEmail = userRes.rows[0]?.email;
+      } catch (err) {
+        console.warn('Could not fetch user email:', err);
+      }
     }
 
-    // Prepare mail content and send via helper
-    const booking = result.rows[0];
-    const preview = await sendEmail(userEmail, `Booking Confirmation - ${booking.id}`, `Your booking is confirmed.\n\nRoom: ${booking.room_id}\nStart: ${booking.start_date}\nEnd: ${booking.end_date}\nStatus: ${booking.status}`);
+    // Send confirmation email (best-effort)
+    try {
+      await sendEmail(userEmail, `Booking Confirmation`, `Your booking is confirmed.\n\nRoom: ${roomId}\nStart: ${startDate}\nEnd: ${endDate}`);
+    } catch (e) {
+      console.warn('Email send failed', e);
+    }
 
-    return res.status(201).json({ 
-      message: 'Booking created successfully', 
-      booking: result.rows[0],
-      emailPreviewUrl: preview || null
-    });
+    // Return only a simple success message
+    return res.status(200).json({ message: 'Booking successful' });
 
   } catch (error: any) {
     await client.query('ROLLBACK');

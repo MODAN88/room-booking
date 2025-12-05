@@ -49,6 +49,7 @@ const RoomBookingApp = () => {
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
+  const [authPreviewUrl, setAuthPreviewUrl] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState(null as { id: string; email: string } | null);
   const [token, setToken] = useState(null as string | null);
   
@@ -110,7 +111,7 @@ const RoomBookingApp = () => {
       const endpoint = authMode === 'login' ? '/v1/auth/login' : '/v1/auth/register';
       const response = await axios.post(`${API_BASE_URL}${endpoint}`, { email, password });
       
-      const { token: newToken, user } = response.data;
+      const { token: newToken, user, emailPreviewUrl } = response.data;
       
       setToken(newToken);
       setCurrentUser(user);
@@ -120,6 +121,7 @@ const RoomBookingApp = () => {
       setEmail('');
       setPassword('');
       setView('rooms');
+      if (emailPreviewUrl) setAuthPreviewUrl(emailPreviewUrl);
     } catch (error: any) {
       const errorMsg = error.response?.data?.error || 'Authentication failed';
       setAuthError(errorMsg);
@@ -197,14 +199,14 @@ const RoomBookingApp = () => {
       const res = await axios.post(`${API_BASE_URL}/v1/bookings`, {
         roomId: selectedRoom!.id,
         startDate,
-        endDate
+        endDate,
+        email: currentUser?.email || undefined
       }, {
         headers: { 'Content-Type': 'application/json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) }
       });
 
-      const previewUrl = res.data?.emailPreviewUrl;
-
-      setBookingStatus({ status: 'SUCCESS', message: previewUrl ? `✓ Room booked! Preview email: ${previewUrl}` : '✓ Room successfully booked!' });
+      // Backend now returns a simple success message; show only a friendly confirmation
+      setBookingStatus({ status: 'SUCCESS', message: '✓ Room successfully booked!' });
       setStartDate('');
       setEndDate('');
       
@@ -324,6 +326,12 @@ const RoomBookingApp = () => {
               >
                 {authLoading ? '⏳ Processing...' : (authMode === 'login' ? 'Login' : 'Register')}
               </button>
+
+              {authPreviewUrl && (
+                <div style={{ marginTop: 12, textAlign: 'center' }}>
+                  <a href={authPreviewUrl} target="_blank" rel="noopener noreferrer" style={{ color: '#0b74ff' }}>View confirmation email preview</a>
+                </div>
+              )}
 
               <div style={{ textAlign: 'center' }}>
                 <button

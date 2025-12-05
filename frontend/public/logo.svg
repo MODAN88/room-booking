@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg width="200" height="50" viewBox="0 0 400 100" xmlns="http://www.w3.org/2000/svg">
+<svg width="60" height="60" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
   <defs>
-    <linearGradient id="g" x1="0" x2="1">
-      <stop offset="0%" stop-color="#4f46e5"/>
-      <stop offset="100%" stop-color="#06b6d4"/>
+    <linearGradient id="a" x1="0" x2="1">
+      <stop offset="0%" stop-color="#0ea5a4" />
+      <stop offset="100%" stop-color="#06b6d4" />
     </linearGradient>
   </defs>
-  <rect width="400" height="100" rx="12" fill="white"/>
-  <g transform="translate(16,16)">
-    <circle cx="36" cy="36" r="28" fill="url(#g)" />
-    <path d="M30 30 L30 42 L42 42 L42 30 Z" fill="white" opacity="0.95" transform="translate(-4,-4)"/>
-    <text x="80" y="48" font-family="Inter, Arial, Helvetica, sans-serif" font-size="28" fill="#0f172a" font-weight="700">RoomBook</text>
-    <text x="80" y="72" font-family="Inter, Arial, Helvetica, sans-serif" font-size="12" fill="#475569">Professional booking made simple</text>
+  <rect width="60" height="60" fill="transparent" />
+  <g transform="translate(6,6)">
+    <rect x="0" y="0" width="48" height="48" rx="10" fill="url(#a)" />
+    <!-- simple house/roof glyph for the icon-only logo -->
+    <path d="M12 20 L24 12 L36 20 L36 34 L12 34 Z" fill="white" opacity="0.98" />
+    <rect x="22" y="24" width="6" height="10" rx="1" fill="#06b6d4" />
   </g>
 </svg>
