@@ -1,4 +1,3 @@
-declare module 'react';
-declare module 'react-dom';
-/// <reference types="react" />
-/// <reference types="react-dom" />
+/// <reference types="react-scripts" />
+
+// This file ensures the TypeScript compiler picks up the React/CRA types

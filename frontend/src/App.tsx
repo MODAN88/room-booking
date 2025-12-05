@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { MdHotel, MdLocationOn, MdPeople, MdAttachMoney, MdCalendarToday, MdCheckCircle, MdCancel } from 'react-icons/md';
 import './App.css';
 
 interface Room {
@@ -23,44 +24,123 @@ interface Booking {
   location?: string;
 }
 
-const API_BASE_URL = 'http://localhost:3000';
+// Use relative path /api that will be proxied by nginx to backend
+const API_BASE_URL = '/api';
 
 interface BookingStatus {
   status: 'IDLE' | 'LOADING' | 'SUCCESS' | 'CONFLICT' | 'ERROR';
   message: string;
 }
 
+// Format date as dd/mm/yyyy
+const formatDateDDMMYYYY = (dateStr: string): string => {
+  const d = new Date(dateStr);
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+  return `${day}/${month}/${year}`;
+};
+
 const RoomBookingApp = () => {
-  const [view, setView] = useState<'rooms' | 'booking' | 'reservations'>('rooms');
-  const [rooms, setRooms] = useState<Room[]>([]);
-  const [bookings, setBookings] = useState<Booking[]>([]);
-  const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
-  const [selectedCountry, setSelectedCountry] = useState<string>('All');
+  const [view, setView] = useState('auth' as 'rooms' | 'booking' | 'reservations' | 'auth');
+  const [authMode, setAuthMode] = useState('login' as 'login' | 'register');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null as { id: string; email: string } | null);
+  const [token, setToken] = useState(null as string | null);
+  
+  const [rooms, setRooms] = useState([] as Room[]);
+  const [bookings, setBookings] = useState([] as Booking[]);
+  const [selectedRoom, setSelectedRoom] = useState(null as Room | null);
+  const [selectedCountry, setSelectedCountry] = useState('All' as string);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [bookingStatus, setBookingStatus] = useState<BookingStatus>({ status: 'IDLE', message: '' });
+  const [bookingStatus, setBookingStatus] = useState({ status: 'IDLE', message: '' } as BookingStatus);
+
+  // Load token from localStorage on mount
+  useEffect(() => {
+    const savedToken = localStorage.getItem('token');
+    const savedUser = localStorage.getItem('user');
+    if (savedToken && savedUser) {
+      setToken(savedToken);
+      setCurrentUser(JSON.parse(savedUser));
+      setView('rooms');
+    }
+  }, []);
 
   useEffect(() => {
-    // fetch rooms from backend
+    // fetch rooms and bookings from backend
     const load = async () => {
       try {
-        const res = await axios.get(`${API_BASE_URL}/api/v1/rooms`);
-        const data = res.data;
-        // support either { rooms: [...] } or raw array
-        setRooms(Array.isArray(data) ? data : data.rooms || []);
-        if ((Array.isArray(data) ? data : data.rooms || []).length > 0) {
-          setSelectedRoom((Array.isArray(data) ? data : data.rooms || [])[0]);
-        }
+        const [roomsRes, bookingsRes] = await Promise.all([
+          axios.get(`${API_BASE_URL}/v1/rooms`),
+          axios.get(`${API_BASE_URL}/v1/bookings`)
+        ]);
+
+        const roomsData = roomsRes.data;
+        const bookingsData = bookingsRes.data;
+
+        const roomsArr: Room[] = Array.isArray(roomsData) ? roomsData : roomsData.rooms || [];
+        const bookingsArr: Booking[] = Array.isArray(bookingsData) ? bookingsData : bookingsData.bookings || [];
+
+        setRooms(roomsArr);
+        setBookings(bookingsArr);
+
+        if (roomsArr.length > 0) setSelectedRoom(roomsArr[0]);
       } catch (err) {
-        console.warn('Failed loading rooms', err);
+        console.warn('Failed loading rooms or bookings', err);
       }
     };
     load();
   }, []);
 
+  const handleAuth = async () => {
+    if (!email || !password) {
+      setAuthError('Email and password required');
+      return;
+    }
+
+    setAuthLoading(true);
+    setAuthError('');
+
+    try {
+      const endpoint = authMode === 'login' ? '/v1/auth/login' : '/v1/auth/register';
+      const response = await axios.post(`${API_BASE_URL}${endpoint}`, { email, password });
+      
+      const { token: newToken, user } = response.data;
+      
+      setToken(newToken);
+      setCurrentUser(user);
+      localStorage.setItem('token', newToken);
+      localStorage.setItem('user', JSON.stringify(user));
+      
+      setEmail('');
+      setPassword('');
+      setView('rooms');
+    } catch (error: any) {
+      const errorMsg = error.response?.data?.error || 'Authentication failed';
+      setAuthError(errorMsg);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setToken(null);
+    setCurrentUser(null);
+    setEmail('');
+    setPassword('');
+    setAuthError('');
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    setView('auth');
+  };
+
   const fetchBookings = async () => {
     try {
-      const res = await axios.get(`${API_BASE_URL}/api/v1/bookings`);
+      const res = await axios.get(`${API_BASE_URL}/v1/bookings`);
       const data = res.data;
       setBookings(Array.isArray(data) ? data : data.bookings || []);
     } catch (err) {
@@ -84,8 +164,19 @@ const RoomBookingApp = () => {
     setBookingStatus({ status: 'IDLE', message: '' });
   };
 
-  const countries = ['All', ...Array.from(new Set(rooms.map(r => r.country)))];
-  const filteredRooms = selectedCountry === 'All' ? rooms : rooms.filter(r => r.country === selectedCountry);
+  const countries = ['All', ...Array.from(new Set(rooms.map((r: Room) => r.country)))];
+  const filteredRooms = selectedCountry === 'All' ? rooms : rooms.filter((r: Room) => r.country === selectedCountry);
+
+  // helper: compute next upcoming booking for a room
+  const getNextBookingForRoom = (roomId: string) => {
+    const now = new Date();
+    const upcoming = bookings
+      .filter((b: Booking) => b.room_id === roomId)
+      .map((b: Booking) => ({ ...b, start: new Date(b.start_date), end: new Date(b.end_date) }))
+      .filter((b: any) => b.end > now)
+      .sort((a: any, b: any) => a.start.getTime() - b.start.getTime());
+    return upcoming.length > 0 ? upcoming[0] : null;
+  };
 
   const handleBooking = async () => {
     setBookingStatus({ status: 'LOADING', message: '' });
@@ -101,15 +192,18 @@ const RoomBookingApp = () => {
     }
 
     try {
-      await axios.post(`${API_BASE_URL}/api/v1/bookings`, {
-        roomId: selectedRoom.id,
+      const authToken = token || localStorage.getItem('token') || '';
+      const res = await axios.post(`${API_BASE_URL}/v1/bookings`, {
+        roomId: selectedRoom!.id,
         startDate,
         endDate
       }, {
-        headers: { 'Content-Type': 'application/json' } 
+        headers: { 'Content-Type': 'application/json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) }
       });
 
-      setBookingStatus({ status: 'SUCCESS', message: '✓ Room successfully booked!' });
+      const previewUrl = res.data?.emailPreviewUrl;
+
+      setBookingStatus({ status: 'SUCCESS', message: previewUrl ? `✓ Room booked! Preview email: ${previewUrl}` : '✓ Room successfully booked!' });
       setStartDate('');
       setEndDate('');
       
@@ -131,11 +225,128 @@ const RoomBookingApp = () => {
   return (
     <div className="app-container">
       <header className="header">
-        <h1>🏨 Room Booking System</h1>
-        <p>Book your perfect stay</p>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 30px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <MdHotel size={48} color="white" />
+            <div>
+              <h1 style={{ display: 'inline', verticalAlign: 'middle' }}>Room Booking System</h1>
+              <p style={{ marginTop: 4 }}>Book your perfect stay</p>
+            </div>
+          </div>
+          {currentUser && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 15 }}>
+              <span style={{ color: 'white', fontSize: '0.95em' }}>👤 {currentUser.email}</span>
+              <button 
+                onClick={handleLogout}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.2)',
+                  color: 'white',
+                  border: '2px solid white',
+                  padding: '8px 16px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                  transition: 'all 0.3s ease'
+                }}
+              >
+                Logout
+              </button>
+            </div>
+          )}
+        </div>
       </header>
 
-      {view === 'rooms' ? (
+      {view === 'auth' ? (
+        <div className="auth-view">
+          <div className="auth-card">
+            <h2 style={{ color: '#333', marginBottom: 20, textAlign: 'center' }}>
+              {authMode === 'login' ? 'Login' : 'Create Account'}
+            </h2>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
+              <input
+                type="email"
+                placeholder="Email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                style={{
+                  padding: '12px 15px',
+                  border: '2px solid #e0e0e0',
+                  borderRadius: '8px',
+                  fontSize: '1em',
+                  fontFamily: 'inherit'
+                }}
+              />
+              
+              <input
+                type="password"
+                placeholder="Password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                onKeyPress={e => e.key === 'Enter' && handleAuth()}
+                style={{
+                  padding: '12px 15px',
+                  border: '2px solid #e0e0e0',
+                  borderRadius: '8px',
+                  fontSize: '1em',
+                  fontFamily: 'inherit'
+                }}
+              />
+
+              {authError && (
+                <div style={{
+                  background: '#f8d7da',
+                  color: '#721c24',
+                  padding: '12px',
+                  borderRadius: '6px',
+                  fontSize: '0.9em',
+                  border: '1px solid #f5c6cb'
+                }}>
+                  {authError}
+                </div>
+              )}
+
+              <button
+                onClick={handleAuth}
+                disabled={authLoading}
+                style={{
+                  padding: '12px',
+                  background: authLoading ? '#ccc' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontSize: '1em',
+                  fontWeight: 'bold',
+                  cursor: authLoading ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.3s ease'
+                }}
+              >
+                {authLoading ? '⏳ Processing...' : (authMode === 'login' ? 'Login' : 'Register')}
+              </button>
+
+              <div style={{ textAlign: 'center' }}>
+                <button
+                  onClick={() => {
+                    setAuthMode(authMode === 'login' ? 'register' : 'login');
+                    setAuthError('');
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#667eea',
+                    cursor: 'pointer',
+                    textDecoration: 'underline',
+                    fontSize: '0.95em',
+                    fontWeight: 600
+                  }}
+                >
+                  {authMode === 'login' ? "Don't have an account? Register" : 'Already have an account? Login'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : view === 'rooms' ? (
         <div className="rooms-view">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
             <h2 style={{ color: 'white' }}>Available Rooms</h2>
@@ -152,19 +363,29 @@ const RoomBookingApp = () => {
             </div>
           </div>
           <div className="rooms-grid">
-            {filteredRooms.map(room => (
-              <div key={room.id} className="room-card" onClick={() => handleRoomSelect(room)}>
-                <div className="room-emoji">{room.emoji}</div>
-                <h3>{room.name}</h3>
-                <p className="location">📍 {room.location} — {room.country}</p>
-                <p className="capacity">👥 {room.capacity} {room.capacity === 1 ? 'guest' : 'guests'}</p>
-                <div className="price-section">
-                  <span className="price">${room.price}</span>
-                  <span className="per-night">per night</span>
+            {filteredRooms.map(room => {
+              const next = getNextBookingForRoom(room.id);
+              return (
+                <div key={room.id} className="room-card" onClick={() => handleRoomSelect(room)}>
+                  <div className="room-emoji">{room.emoji}</div>
+                  <h3>{room.name}</h3>
+                  <p className="location">📍 {room.location} — {room.country}</p>
+                  <p className="capacity">👥 {room.capacity} {room.capacity === 1 ? 'guest' : 'guests'}</p>
+                  <div className="price-section">
+                    <span className="price">${room.price}</span>
+                    <span className="per-night">per night</span>
+                  </div>
+                  {next ? (
+                    <div style={{ marginBottom: 12, color: '#b00020', fontWeight: 600 }}>
+                      Booked: {formatDateDDMMYYYY(next.start_date)} → {formatDateDDMMYYYY(next.end_date)}
+                    </div>
+                  ) : (
+                    <div style={{ marginBottom: 12, color: '#0a8a0a', fontWeight: 600 }}>Available</div>
+                  )}
+                  <button className="book-btn">Book Now</button>
                 </div>
-                <button className="book-btn">Book Now</button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       ) : view === 'booking' ? (
@@ -255,7 +476,7 @@ const RoomBookingApp = () => {
                 {bookings.map(b => (
                   <div key={b.id} className="booking-row">
                     <div><strong>{b.room_name || b.room_id}</strong> — {b.location}</div>
-                    <div>{new Date(b.start_date).toLocaleDateString()} → {new Date(b.end_date).toLocaleDateString()}</div>
+                    <div>{formatDateDDMMYYYY(b.start_date)} → {formatDateDDMMYYYY(b.end_date)}</div>
                     <div>Status: {b.status}</div>
                   </div>
                 ))}
@@ -266,7 +487,7 @@ const RoomBookingApp = () => {
       )}
 
       <footer className="footer">
-        <p>© 2025 Room Booking System. All rights reserved.</p>
+        <p>© 2025 Room Booking System by Modan Baron.</p>
       </footer>
     </div>
   );

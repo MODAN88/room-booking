@@ -51,7 +51,10 @@ services:
 
   # 4. Frontend Service (React UI)
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        REACT_APP_API_URL: http://backend:3000
     container_name: booking_frontend
     restart: unless-stopped
     # UI will be available on http://localhost:8080
