@@ -85,10 +85,14 @@ app.post('/api/v1/auth/register', async (req: Request, res: Response) => {
     const user = result.rows[0];
     const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
 
+    // Send welcome email (returns preview URL when in test fallback)
+    const preview = await sendEmail(user.email, 'Welcome to Room Booking', `Welcome ${user.email} — your account has been created.`);
+
     res.status(201).json({
       message: 'User registered successfully',
       user: { id: user.id, email: user.email },
-      token
+      token,
+      emailPreviewUrl: preview || null
     });
   } catch (error: any) {
     console.error('Registration error:', error);
@@ -218,11 +222,45 @@ app.get('/api/v1/rooms', async (req: Request, res: Response) => {
   }
 });
 
+// Helper: send email (SMTP if configured, otherwise Ethereal test account)
+async function sendEmail(to: string | undefined, subject: string, text: string): Promise<string | null> {
+  if (!to) return null;
+  try {
+    if (process.env.SMTP_HOST) {
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: parseInt(process.env.SMTP_PORT || '587'),
+        secure: (process.env.SMTP_SECURE === 'true'),
+        auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } : undefined,
+      });
+
+      const info = await transporter.sendMail({ from: process.env.EMAIL_FROM || 'no-reply@example.com', to, subject, text });
+      console.log('Email sent:', info.messageId);
+      return null;
+    } else {
+      const testAccount = await nodemailer.createTestAccount();
+      const transporter = nodemailer.createTransport({
+        host: 'smtp.ethereal.email',
+        port: 587,
+        secure: false,
+        auth: { user: testAccount.user, pass: testAccount.pass }
+      });
+      const info = await transporter.sendMail({ from: process.env.EMAIL_FROM || 'no-reply@example.com', to, subject, text });
+      const preview = nodemailer.getTestMessageUrl(info) || null;
+      console.log('Test email sent. Preview URL:', preview);
+      return preview;
+    }
+  } catch (err) {
+    console.warn('Failed to send email:', err);
+    return null;
+  }
+}
+
 // List bookings (all)
 app.get('/api/v1/bookings', async (req: Request, res: Response) => {
   try {
     const q = `
-      SELECT b.id, b.room_id, b.start_date, b.end_date, b.status, b.created_at, r.name as room_name, r.location
+      SELECT b.id, b.user_id, b.room_id, b.start_date, b.end_date, b.status, b.created_at, r.name as room_name, r.location
       FROM bookings b
       LEFT JOIN rooms r ON r.id = b.room_id
       ORDER BY b.start_date DESC;
@@ -314,62 +352,14 @@ app.post('/api/v1/bookings', async (req: Request, res: Response) => {
       console.warn('Could not fetch user email:', err);
     }
 
-    // Prepare mail options
+    // Prepare mail content and send via helper
     const booking = result.rows[0];
-    const mailOptions = {
-      from: process.env.EMAIL_FROM || 'no-reply@example.com',
-      to: userEmail,
-      subject: `Booking Confirmation - ${booking.id}`,
-      text: `Your booking is confirmed.\n\nRoom: ${booking.room_id}\nStart: ${booking.start_date}\nEnd: ${booking.end_date}\nStatus: ${booking.status}`
-    };
+    const preview = await sendEmail(userEmail, `Booking Confirmation - ${booking.id}`, `Your booking is confirmed.\n\nRoom: ${booking.room_id}\nStart: ${booking.start_date}\nEnd: ${booking.end_date}\nStatus: ${booking.status}`);
 
-    // If SMTP configured, use it. Otherwise create a test account and send via Ethereal for local preview.
-    try {
-      if (process.env.SMTP_HOST && userEmail) {
-        const transporter = nodemailer.createTransport({
-          host: process.env.SMTP_HOST,
-          port: parseInt(process.env.SMTP_PORT || '587'),
-          secure: (process.env.SMTP_SECURE === 'true'),
-          auth: process.env.SMTP_USER ? {
-            user: process.env.SMTP_USER,
-            pass: process.env.SMTP_PASS
-          } : undefined
-        });
-
-        const info = await transporter.sendMail(mailOptions);
-        console.log('Booking confirmation email sent:', info.messageId);
-        // include no preview URL for real SMTP
-        (res as any).locals.emailPreviewUrl = null;
-      } else if (userEmail) {
-        // No SMTP set — create a test account and send so developer can preview messages locally
-        const testAccount = await nodemailer.createTestAccount();
-        const transporter = nodemailer.createTransport({
-          host: 'smtp.ethereal.email',
-          port: 587,
-          secure: false,
-          auth: {
-            user: testAccount.user,
-            pass: testAccount.pass
-          }
-        });
-
-        const info = await transporter.sendMail(mailOptions);
-        const preview = nodemailer.getTestMessageUrl(info) || null;
-        console.log('Test booking email sent. Preview URL:', preview);
-        (res as any).locals.emailPreviewUrl = preview;
-      } else {
-        if (!userEmail) console.log('No user email found; skipping email send.');
-        (res as any).locals.emailPreviewUrl = null;
-      }
-    } catch (mailErr) {
-      console.warn('Failed sending booking email:', mailErr);
-      (res as any).locals.emailPreviewUrl = null;
-    }
-    
     return res.status(201).json({ 
       message: 'Booking created successfully', 
       booking: result.rows[0],
-      emailPreviewUrl: (res as any).locals.emailPreviewUrl || null
+      emailPreviewUrl: preview || null
     });
 
   } catch (error: any) {
@@ -381,7 +371,69 @@ app.post('/api/v1/bookings', async (req: Request, res: Response) => {
   }
 });
 
+// Close (or mark) a booking as CLOSED — only the booking owner may perform this
+app.post('/api/v1/bookings/:id/close', verifyToken, async (req: Request, res: Response) => {
+  const bookingId = req.params.id;
+  const userId = (req as any).userId as string;
+
+  try {
+    // Fetch booking and verify owner
+    const q = `SELECT id, user_id, room_id, start_date, end_date, status FROM bookings WHERE id = $1`;
+    const r = await pgPool.query(q, [bookingId]);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Booking not found' });
+    const booking = r.rows[0];
+    if (booking.user_id !== userId) return res.status(403).json({ error: 'Not authorized to close this booking' });
+
+    const updateQ = `UPDATE bookings SET status = 'CLOSED' WHERE id = $1 RETURNING id, user_id, room_id, start_date, end_date, status`;
+    const updated = await pgPool.query(updateQ, [bookingId]);
+
+    // Fetch user email
+    let userEmail: string | undefined;
+    try {
+      const userRes = await pgPool.query('SELECT email FROM users WHERE id = $1', [userId]);
+      userEmail = userRes.rows[0]?.email;
+    } catch (err) {
+      console.warn('Could not fetch user email for close notification:', err);
+    }
+
+    const closed = updated.rows[0];
+    const preview = await sendEmail(userEmail, `Booking Closed - ${closed.id}`, `Your booking ${closed.id} has been closed.`);
+
+    return res.json({ booking: closed, emailPreviewUrl: preview || null });
+  } catch (err) {
+    console.error('Failed to close booking', err);
+    return res.status(500).json({ error: 'Failed to close booking' });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Backend server running on port ${PORT}`);
+});
+
+// Admin: reset DB data (bookings, users, rooms)
+// If ADMIN_SECRET env var is set, caller must provide header `x-admin-secret: <secret>` or body { secret }
+app.post('/api/v1/admin/reset', async (req: Request, res: Response) => {
+  const provided = (req.headers['x-admin-secret'] as string) || req.body?.secret;
+  const adminSecret = process.env.ADMIN_SECRET;
+  if (adminSecret && provided !== adminSecret) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const client = await pgPool.connect();
+  try {
+    await client.query('BEGIN');
+    // Careful: this removes ALL rooms, users and bookings
+    await client.query('TRUNCATE TABLE bookings RESTART IDENTITY CASCADE');
+    await client.query('TRUNCATE TABLE users RESTART IDENTITY CASCADE');
+    await client.query('TRUNCATE TABLE rooms RESTART IDENTITY CASCADE');
+    await client.query('COMMIT');
+    return res.json({ message: 'Database reset: bookings, users, rooms truncated' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Admin reset failed', err);
+    return res.status(500).json({ error: 'Reset failed' });
+  } finally {
+    client.release();
+  }
 });

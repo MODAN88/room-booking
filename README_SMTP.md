@@ -42,3 +42,16 @@ Questions
 ---------
 If you want, I can: 1) add sample `docker-compose` env entries (commented) to the repository, or
 2) wire a `.env.example` file to make it easier to provide these values locally.
+
+Admin reset endpoint
+--------------------
+For development convenience I added an admin endpoint `POST /api/v1/admin/reset` that truncates `bookings`, `users`, and `rooms`.
+- If `ADMIN_SECRET` is set in the environment, callers must include that secret either in the `x-admin-secret` header or in the POST JSON body as `{ "secret": "..." }`.
+- If `ADMIN_SECRET` is not set, the endpoint will allow the call (intended for local development).
+
+Use with caution: this permanently deletes the data. Example call:
+
+```bash
+curl -X POST http://localhost:3000/api/v1/admin/reset
+```
+

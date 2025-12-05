@@ -15,6 +15,7 @@ interface Room {
 
 interface Booking {
   id: string;
+  user_id?: string;
   room_id: string;
   start_date: string;
   end_date: string;
@@ -226,8 +227,8 @@ const RoomBookingApp = () => {
     <div className="app-container">
       <header className="header">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 30px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <MdHotel size={48} color="white" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }} onClick={() => setView('rooms')}>
+            <img src="/logo.svg" alt="RoomBook" style={{ height: 56 }} />
             <div>
               <h1 style={{ display: 'inline', verticalAlign: 'middle' }}>Room Booking System</h1>
               <p style={{ marginTop: 4 }}>Book your perfect stay</p>
@@ -475,9 +476,27 @@ const RoomBookingApp = () => {
               <div className="bookings-list">
                 {bookings.map(b => (
                   <div key={b.id} className="booking-row">
-                    <div><strong>{b.room_name || b.room_id}</strong> — {b.location}</div>
-                    <div>{formatDateDDMMYYYY(b.start_date)} → {formatDateDDMMYYYY(b.end_date)}</div>
-                    <div>Status: {b.status}</div>
+                    <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                      <div style={{ flex: 1 }}><strong>{b.room_name || b.room_id}</strong> — {b.location}</div>
+                      <div style={{ minWidth: 220 }}>{formatDateDDMMYYYY(b.start_date)} → {formatDateDDMMYYYY(b.end_date)}</div>
+                      <div style={{ minWidth: 140 }}>Status: {b.status}</div>
+                      {token && currentUser && b.user_id === currentUser.id && b.status !== 'CLOSED' && (
+                        <button onClick={async () => {
+                          try {
+                            const res = await axios.post(`${API_BASE_URL}/v1/bookings/${b.id}/close`, {}, { headers: { Authorization: `Bearer ${token}` } });
+                            const preview = res.data?.emailPreviewUrl;
+                            alert(preview ? `Booking closed. Email preview: ${preview}` : 'Booking closed.');
+                            fetchBookings();
+                          } catch (err: any) {
+                            alert(err.response?.data?.error || 'Failed to close booking');
+                          }
+                        }} style={{ marginLeft: 12 }}>Close</button>
+                      )}
+                    </div>
+                    <div style={{ marginTop: 6 }}>
+                      {formatDateDDMMYYYY(b.start_date)} → {formatDateDDMMYYYY(b.end_date)}
+                    </div>
+                    <div style={{ marginTop: 6 }}>Status: {b.status}</div>
                   </div>
                 ))}
               </div>
