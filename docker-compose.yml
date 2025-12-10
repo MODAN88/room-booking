@@ -45,6 +45,13 @@ services:
       DB_NAME: booking_platform
       REDIS_HOST: cache
       PORT: 3000
+      # SMTP Email Configuration
+      SMTP_HOST: smtp.gmail.com
+      SMTP_PORT: 587
+      SMTP_SECURE: "false"
+      SMTP_USER: modan.b@gmail.com
+      SMTP_PASS: fossfwwwtxbppkvv
+      EMAIL_FROM: "Room Booking System <modan.b@gmail.com>"
     depends_on:
       - db
       - cache
