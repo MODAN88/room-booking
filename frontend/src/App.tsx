@@ -271,7 +271,7 @@ const RoomBookingApp = () => {
                 type="email"
                 placeholder="Email"
                 value={email}
-                onChange={e => setEmail(e.target.value)}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)}
                 style={{
                   padding: '12px 15px',
                   border: '2px solid #e0e0e0',
@@ -285,8 +285,8 @@ const RoomBookingApp = () => {
                 type="password"
                 placeholder="Password"
                 value={password}
-                onChange={e => setPassword(e.target.value)}
-                onKeyPress={e => e.key === 'Enter' && handleAuth()}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)}
+                onKeyPress={(e: React.KeyboardEvent<HTMLInputElement>) => e.key === 'Enter' && handleAuth()}
                 style={{
                   padding: '12px 15px',
                   border: '2px solid #e0e0e0',
@@ -362,7 +362,7 @@ const RoomBookingApp = () => {
             <div style={{ display: 'flex', gap: 12 }}>
               <div>
                 <label style={{ color: 'white', marginRight: 10, fontWeight: 600 }}>Country:</label>
-                <select value={selectedCountry} onChange={(e: any) => setSelectedCountry(e.target.value)} style={{ padding: '8px', borderRadius: 6 }}>
+                <select value={selectedCountry} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSelectedCountry(e.target.value)} style={{ padding: '8px', borderRadius: 6 }}>
                   {countries.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
@@ -423,7 +423,7 @@ const RoomBookingApp = () => {
                   id="start-date"
                   type="date"
                   value={startDate}
-                  onChange={e => setStartDate(e.target.value)}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setStartDate(e.target.value)}
                   min={minStart}
                   className="date-input"
                 />
@@ -435,7 +435,7 @@ const RoomBookingApp = () => {
                   id="end-date"
                   type="date"
                   value={endDate}
-                  onChange={e => setEndDate(e.target.value)}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEndDate(e.target.value)}
                   min={minEnd}
                   className="date-input"
                 />
