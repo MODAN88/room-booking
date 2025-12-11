@@ -1,126 +1,355 @@
 # 🏨 Room Booking Platform
 
-This project implements a scalable and fault-tolerant Room Booking Platform designed around a **Microservices Architecture**. It fulfills the requirements of supporting user registration, room search, and booking capabilities, with a strong focus on **data consistency** and **concurrency handling**.
+Enterprise-grade room booking system with **ACID transaction guarantees** and **pessimistic locking** to prevent double-bookings. The platform implements concurrent-safe booking operations using PostgreSQL's row-level locks (FOR UPDATE) within transaction boundaries.
+
+**Key Features:**
+- ✅ ACID-compliant booking transactions with conflict detection
+- ✅ Pessimistic locking (FOR UPDATE) for race condition prevention
+- ✅ JWT-based authentication with bcrypt password hashing
+- ✅ Email notifications via SMTP (Gmail) with Ethereal test fallback
+- ✅ RESTful API with comprehensive error handling
+- ✅ Horizontal scalability with stateless backend design
 
 -----
 
-## 1\. Architecture and Tech Stack
-
-The system is designed with two core microservices (UI and BE), orchestrated by Docker Compose, and built on best-practice technologies for scalability and maintainability.
+## 1\. Technical Architecture
 
 ### High-Level Components
 
-  * **Frontend (UI):** A Single Page Application (SPA) built with **React** and **TypeScript**, served by Nginx.
-  * **Backend (BE):** A Stateless API service built with **Node.js** and **TypeScript** (Express), handling all business logic and concurrency control.
-  * **Database:** **PostgreSQL** (Master/Replica model for scaling), chosen for its strong support for **ACID transactions** essential for booking integrity.
-  * **Cache:** **Redis**, used for caching frequent search queries and potentially session management.
-  * **Orchestration:** **Docker Compose** for local development setup.
+  * **Frontend (UI):** React 18 + TypeScript SPA served by Nginx on port 8080
+  * **Backend (BE):** Express.js + Node.js (TypeScript) - Stateless API with transaction-based concurrency control on port 3000
+  * **Database:** PostgreSQL 15 with UUID support - Master database for ACID transactional consistency
+  * **Cache:** Redis Alpine - Optional caching layer for read-heavy queries
+  * **Orchestration:** Docker Compose with 4 containerized services
+  * **Email:** Nodemailer with configurable SMTP (Gmail app password) + Ethereal fallback
 
 ### 
 
 -----
 
-## 2\. Key Design Decisions
+## 2\. Concurrency Control & ACID Transactions
 
-### A. Concurrency Handling (Preventing Double Booking)
+The booking system uses **ACID transactions** with **pessimistic locking** to guarantee data consistency under concurrent load.
 
-The most critical challenge is ensuring only one booking is confirmed for the same room and date range.
+### Double-Booking Prevention Algorithm
 
-  * **Mechanism:** **Pessimistic Locking** via Database Transactions.
-  * **Process:**
-    1.  The Backend starts a **DB Transaction**.
-    2.  It executes a query to check for overlapping bookings using date ranges and `room_id`.
-    3.  The critical step is appending **`FOR UPDATE`** to the SELECT query, which locks any found rows (or the relevant index range) until the transaction commits.
-    4.  If no conflict is found, the new booking is inserted.
-    5.  The transaction is committed.
-  * **Failure Mode:** If a concurrent request attempts to access the same resource, it either waits or fails the transaction, resulting in a **`409 Conflict`** response.
+```
+1. Client sends POST /api/v1/bookings with (roomId, startDate, endDate)
+2. Backend validates:
+   - Date format: ISO 8601 (YYYY-MM-DD)
+   - Date logic: endDate > startDate
+   - Authentication: JWT token required (401 if missing)
+3. Backend initiates transaction: BEGIN
+4. Query with FOR UPDATE lock:
+   SELECT id FROM bookings 
+   WHERE room_id = $1 
+   AND start_date < $2          [new endDate]
+   AND end_date > $3            [new startDate]
+   AND status != 'CANCELLED'
+   FOR UPDATE                   [blocks concurrent transactions]
+5. Conflict detection:
+   - If row exists: ROLLBACK and return 409 Conflict
+   - If no conflict: INSERT booking and COMMIT
+6. Upon success: Send confirmation email with booking details
+```
 
-### B. Scalability Strategies
+**Why FOR UPDATE?**
+- Pessimistic locking acquires exclusive locks on conflicting rows
+- Other transactions block until current transaction completes
+- Prevents phantom reads and lost updates
+- Guarantees serializable isolation level for this operation
 
-  * **Read/Write Splitting:** All high-volume **Search** (`GET /rooms`) requests are designed to hit **Read Replicas** and **Redis Cache** to offload the Database Master.
-  * **Horizontal Scaling:** The Node.js Backend is **Stateless** and can be easily scaled horizontally (adding more instances) behind a Load Balancer (e.g., in Kubernetes/ECS).
-  * **Asynchronous Processing:** Booking confirmations are handled by sending messages to a **Message Queue** (e.g., RabbitMQ), preventing the API response time from being tied to the email sending service.
+### Transaction Flow Diagram
+
+```
+Time →
+T1: BEGIN                    T2: BEGIN
+    SELECT ... FOR UPDATE ─→ (waits for lock release)
+    INSERT booking
+    COMMIT ──────────────→ (acquires lock)
+                            SELECT finds no conflict
+                            INSERT booking  
+                            COMMIT
+```
+
+### Key Design Decisions
+
+  * **Pessimistic Locking:** Chose FOR UPDATE over optimistic locking because booking conflicts are likely in high-demand periods
+  * **Composite Index:** `bookings(room_id, start_date, end_date, status)` for efficient range queries
+  * **Transaction Rollback:** Automatic ROLLBACK on any error ensures no partial bookings
+  * **HTTP Status Codes:**
+    - `201 Created` - Booking successful
+    - `400 Bad Request` - Invalid date format or logic
+    - `401 Unauthorized` - Missing/invalid JWT token
+    - `409 Conflict` - Room already booked for dates
 
 -----
 
-## 3\. API Endpoints
+## 3\. API Specification
 
-The API is RESTful, uses JSON, and requires authentication for booking.
+RESTful API with JWT Bearer token authentication for protected endpoints.
 
-| Endpoint | Method | Description | Authentication |
+### Authentication
+
+**JWT Token Generation:**
+- Algorithm: HS256
+- Payload: `{ userId, email }`
+- Expiration: 7 days
+- Usage: `Authorization: Bearer <token>`
+
+**Password Security:**
+- Algorithm: bcrypt with 10 salt rounds
+- Hash comparison: constant-time algorithm (timing attack resistant)
+
+### Endpoints
+
+| Endpoint | Method | Auth | Description |
 | :--- | :--- | :--- | :--- |
-| `/api/v1/auth/register` | `POST` | User registration (returns JWT). | None |
-| `/api/v1/rooms` | `GET` | **Search** for available rooms (requires `startDate`, `endDate` query params). | Optional |
-| `/api/v1/bookings` | `POST` | Creates a new room booking (critical, concurrent operation). | Required (Mocked) |
+| `/api/v1/auth/register` | POST | None | Register user with email/password, returns JWT token (201) |
+| `/api/v1/auth/login` | POST | None | Authenticate with email/password, returns JWT token (200) |
+| `/api/v1/rooms` | GET | Optional | List all rooms with emoji icons and pricing (200) |
+| `/api/v1/bookings` | GET | Optional | Retrieve all bookings (200) |
+| `/api/v1/bookings` | POST | **Required** | Create booking with conflict detection, returns 201/409 |
+| `/api/v1/bookings/:id/close` | POST | **Required** | Mark booking as CLOSED, owner-only (200) |
+| `/api/v1/admin/reset` | POST | Optional | Truncate all tables for clean state (200) |
+| `/health` | GET | None | Health check endpoint (200) |
+
+### POST /api/v1/bookings Request/Response
+
+**Request:**
+```json
+{
+  "roomId": "00000000-0000-0000-0000-000000000001",
+  "startDate": "2025-01-15",
+  "endDate": "2025-01-18",
+  "email": "guest@example.com"
+}
+```
+
+**Headers:**
+```
+Authorization: Bearer <jwt_token>
+Content-Type: application/json
+```
+
+**Success Response (201):**
+```json
+{
+  "message": "Booking successful",
+  "bookingId": "12345678-1234-5678-1234-567812345678",
+  "emailSent": true,
+  "emailPreviewUrl": null
+}
+```
+
+**Conflict Response (409):**
+```json
+{
+  "error": "Room is already booked for these dates",
+  "conflictingBookings": [
+    { "id": "existing-booking-id" }
+  ]
+}
+```
+
+**Validation Error (400):**
+```json
+{
+  "error": "Invalid date format. Use YYYY-MM-DD"
+}
+```
+
+**Authentication Error (401):**
+```json
+{
+  "error": "Authentication required",
+  "message": "You must be logged in to make a booking"
+}
+```
 
 -----
 
-## 4\. Database Schema
+## 4\. Database Schema & Indexing
 
-Uses PostgreSQL with key indexes for performance and concurrency.
+PostgreSQL schema designed for concurrent transactional consistency.
 
-| Table | Primary Columns | Key Indexes |
-| :--- | :--- | :--- |
-| `users` | `id`, `email`, `password_hash` | `email` (UNIQUE) |
-| `rooms` | `id`, `name`, `capacity`, `location` | `location`, `capacity` |
-| **`bookings`** | `id`, `user_id` (FK), `room_id` (FK), `start_date`, `end_date` | **`idx_bookings_room_dates` (Composite)** |
+### Tables
+
+```sql
+CREATE TABLE users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email VARCHAR(255) UNIQUE NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE rooms (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR(255) NOT NULL,
+  location VARCHAR(255) NOT NULL,
+  capacity INT NOT NULL,
+  price_per_night DECIMAL(10,2) NOT NULL,
+  country VARCHAR(100),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE bookings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id),
+  room_id UUID NOT NULL REFERENCES rooms(id),
+  start_date DATE NOT NULL,
+  end_date DATE NOT NULL,
+  status VARCHAR(50) DEFAULT 'CONFIRMED',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### Critical Indexes
+
+```sql
+-- Users: email lookup
+CREATE UNIQUE INDEX idx_users_email ON users(email);
+
+-- Rooms: location/capacity search
+CREATE INDEX idx_rooms_location ON rooms(location);
+CREATE INDEX idx_rooms_capacity ON rooms(capacity);
+
+-- Bookings: critical for conflict detection
+CREATE INDEX idx_bookings_room_dates 
+  ON bookings(room_id, start_date, end_date, status)
+  WHERE status != 'CANCELLED';
+```
+
+### Overlap Detection Query
+
+Finds all bookings that conflict with proposed [start_date, end_date):
+
+```sql
+SELECT id FROM bookings 
+WHERE room_id = $1 
+AND start_date < $2              -- proposed end_date
+AND end_date > $3                -- proposed start_date
+AND status != 'CANCELLED'
+FOR UPDATE;                       -- pessimistic lock
+```
+
+**Overlap Logic:** Two date ranges overlap if:
+- `rangeA.start < rangeB.end AND rangeA.end > rangeB.start`
 
 -----
 
-## 5\. Getting Started (Installation and Setup)
+## 5\. Installation & Setup
 
 ### Prerequisites
 
-  * **Docker** (Docker Desktop on Mac/Windows) installed and running.
-  * **Git** (for cloning the repository).
+- Docker & Docker Compose (Docker Desktop on macOS/Windows)
+- Git
+- Curl (for testing API endpoints)
 
-### Setup Instructions
+### Quick Start
 
-1.  **Clone the repository and navigate to the root directory:**
+```bash
+# Clone repository
+git clone https://github.com/MODAN88/room-booking.git
+cd room-booking
 
-    ```bash
-    git clone [your-repo-link] room-booking-system
-    cd room-booking-system
-    ```
+# Start all services
+docker compose up --build
 
-2.  **Build and Run the entire application using Docker Compose:**
+# Wait for PostgreSQL to be ready (~10 seconds)
+# Services will be available at:
+```
 
-    This command builds the Node.js and React images and starts all four containers (`db`, `cache`, `backend`, `frontend`).
+| Service | URL | Port |
+| :--- | :--- | :--- |
+| Frontend | http://localhost:8080 | 8080 |
+| Backend API | http://localhost:3000 | 3000 |
+| PostgreSQL | localhost:5432 | 5432 |
+| Redis | localhost:6379 | 6379 |
 
-    ```bash
-    docker compose up --build
-    ```
+### Database Initialization
 
-### Accessing the System
+The `db/init.sql` script automatically:
+1. Creates schema with UUID support
+2. Drops and recreates tables (clean slate on each restart)
+3. Seeds 48 rooms across 13 countries
+4. Inserts 1 test user
 
-| Component | URL (Local) |
-| :--- | :--- |
-| **Frontend UI** | `http://localhost:8080` |
-| **Backend API** | `http://localhost:3000` |
-| **PostgreSQL DB** | `localhost:5432` |
-| **Redis Cache** | `localhost:6379` |
+**Reset database:**
+```bash
+# Via API
+curl -X POST http://localhost:3000/api/v1/admin/reset
+
+# Or restart Docker
+docker compose down -v
+docker compose up --build
+```
 
 -----
 
-## 6\. Testing Concurrency (Double Booking Test)
+## 6\. Testing Concurrency & Conflict Detection
 
-You can manually test the concurrency mechanism using the terminal while the services are running. This test attempts to book the same room (`00000000-0000-0000-0000-000000000001`) simultaneously.
+### Manual Concurrency Test
 
-1.  **Define Variables:**
+Test the pessimistic locking mechanism by attempting simultaneous bookings:
 
-    ```bash
-    ROOM_ID="00000000-0000-0000-0000-000000000001" 
-    PAYLOAD='{"roomId": "'$ROOM_ID'", "startDate": "2025-01-01", "endDate": "2025-01-05"}'
-    ```
+```bash
+# 1. Register a test user and get JWT token
+REGISTER_RESPONSE=$(curl -s -X POST "http://localhost:3000/api/v1/auth/register" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","password":"password123"}')
 
-2.  **Run Concurrent Requests:**
+TOKEN=$(echo $REGISTER_RESPONSE | jq -r '.token')
 
-    ```bash
-    (curl -s -X POST "http://localhost:3000/api/v1/bookings" -H "Content-Type: application/json" -d "$PAYLOAD" -w "\nRequest 1 Status: %{http_code}\n") &
+# 2. Define booking parameters
+ROOM_ID="00000000-0000-0000-0000-000000000001"
+PAYLOAD='{"roomId":"'$ROOM_ID'","startDate":"2025-02-01","endDate":"2025-02-05"}'
 
-    (curl -s -X POST "http://localhost:3000/api/v1/bookings" -H "Content-Type: application/json" -d "$PAYLOAD" -w "Request 2 Status: %{http_code}\n") &
+# 3. Send two simultaneous booking requests
+(curl -s -X POST "http://localhost:3000/api/v1/bookings" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d "$PAYLOAD" | jq '.') &
 
-    wait
-    ```
+sleep 0.1
 
-3.  **Expected Output:** One request must return **`201`** (Created), and the other must return **`409`** (Conflict), proving that the concurrency lock successfully prevented double booking.
+(curl -s -X POST "http://localhost:3000/api/v1/bookings" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d "$PAYLOAD" | jq '.') &
+
+wait
+```
+
+**Expected Behavior:**
+- Request 1: `201 Created` with bookingId
+- Request 2: `409 Conflict` with error message
+
+### Validation Tests
+
+```bash
+TOKEN="<your_jwt_token>"
+
+# Test 1: Invalid date format
+curl -X POST "http://localhost:3000/api/v1/bookings" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"roomId":"...","startDate":"01-02-2025","endDate":"05-02-2025"}'
+# Expected: 400 Bad Request
+
+# Test 2: End date before start date
+curl -X POST "http://localhost:3000/api/v1/bookings" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"roomId":"...","startDate":"2025-02-05","endDate":"2025-02-01"}'
+# Expected: 400 Bad Request
+
+# Test 3: Missing authentication
+curl -X POST "http://localhost:3000/api/v1/bookings" \
+  -d '{"roomId":"...","startDate":"2025-02-01","endDate":"2025-02-05"}'
+# Expected: 401 Unauthorized
+
+# Test 4: Valid booking
+curl -X POST "http://localhost:3000/api/v1/bookings" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"roomId":"...","startDate":"2025-03-01","endDate":"2025-03-05"}'
+# Expected: 201 Created with bookingId
+```

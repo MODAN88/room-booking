@@ -7,7 +7,7 @@ import jwt from 'jsonwebtoken';
 const app = express();
 app.use(express.json());
 
-// CORS middleware
+/** CORS middleware: Enables cross-origin requests from any domain */
 app.use((req: Request, res: Response, next: NextFunction) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -19,7 +19,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// PostgreSQL connection
+/** PostgreSQL connection pool with configurable parameters from environment */
 const pgPool = new Pool({
   user: process.env.DB_USER || 'admin',
   password: process.env.DB_PASS || 'password',
@@ -28,15 +28,14 @@ const pgPool = new Pool({
   database: process.env.DB_NAME || 'booking_platform',
 });
 
-// Health check endpoint
 app.get('/health', (req: Request, res: Response) => {
   res.json({ status: 'OK' });
 });
 
-// JWT secret for token signing
+/** JWT secret for signing tokens - 7-day expiration configured at sign time */
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
-// Middleware to verify JWT token
+/** Middleware: Extracts and validates JWT Bearer token from Authorization header */
 const verifyToken = (req: Request, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
   const token = authHeader && authHeader.split(' ')[1];
@@ -54,7 +53,7 @@ const verifyToken = (req: Request, res: Response, next: NextFunction) => {
   });
 };
 
-// User registration endpoint
+/** POST /api/v1/auth/register: User registration with bcrypt password hashing (10 rounds) */
 app.post('/api/v1/auth/register', async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
@@ -62,30 +61,27 @@ app.post('/api/v1/auth/register', async (req: Request, res: Response) => {
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password required' });
     }
-
     if (password.length < 6) {
       return res.status(400).json({ error: 'Password must be at least 6 characters' });
     }
 
-    // Check if user already exists
     const existingUser = await pgPool.query('SELECT id FROM users WHERE email = $1', [email]);
     if (existingUser.rows.length > 0) {
       return res.status(409).json({ error: 'Email already registered' });
     }
 
-    // Hash password
+    /** Hash password with bcrypt salt rounds = 10 (balanced security vs performance) */
     const passwordHash = await bcrypt.hash(password, 10);
 
-    // Create user
     const result = await pgPool.query(
       'INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email, created_at',
       [email, passwordHash]
     );
 
     const user = result.rows[0];
+    /** Generate JWT token with 7-day expiration */
     const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
 
-    // Send welcome email (returns preview URL when in test fallback)
     const preview = await sendEmail(user.email, 'Welcome to Room Booking', `Welcome ${user.email} — your account has been created.`);
 
     res.status(201).json({
@@ -100,7 +96,7 @@ app.post('/api/v1/auth/register', async (req: Request, res: Response) => {
   }
 });
 
-// User login endpoint
+/** POST /api/v1/auth/login: Authenticates user with email and password, returns JWT token */
 app.post('/api/v1/auth/login', async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
@@ -108,16 +104,13 @@ app.post('/api/v1/auth/login', async (req: Request, res: Response) => {
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password required' });
     }
-
-    // Find user
     const result = await pgPool.query('SELECT id, email, password_hash FROM users WHERE email = $1', [email]);
     if (result.rows.length === 0) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
     const user = result.rows[0];
-
-    // Verify password
+    /** Use bcrypt.compare to safely verify password against stored hash */
     const passwordMatch = await bcrypt.compare(password, user.password_hash);
     if (!passwordMatch) {
       return res.status(401).json({ error: 'Invalid email or password' });
@@ -136,11 +129,12 @@ app.post('/api/v1/auth/login', async (req: Request, res: Response) => {
   }
 });
 
-// Rooms list
+/** GET /api/v1/rooms: Lists all available rooms with emoji icons based on room type/keywords */
 app.get('/api/v1/rooms', async (req: Request, res: Response) => {
   try {
     const result = await pgPool.query(`SELECT id, name, price_per_night, location, capacity, country FROM rooms ORDER BY location;`);
 
+    /** Map rooms with emoji icons by matching keywords in room name */
     const emojiMap: Record<string, string> = {
       'King': '👑',
       'Suite': '✨',
@@ -222,11 +216,12 @@ app.get('/api/v1/rooms', async (req: Request, res: Response) => {
   }
 });
 
-// Helper: send email (SMTP if configured, otherwise Ethereal test account)
+/** Sends email via configured SMTP (Gmail) or falls back to Ethereal test email service */
 async function sendEmail(to: string | undefined, subject: string, text: string): Promise<string | null> {
   if (!to) return null;
   try {
     if (process.env.SMTP_HOST) {
+      /** Production: Use configured SMTP (Gmail with app password) */
       const transporter = nodemailer.createTransport({
         host: process.env.SMTP_HOST,
         port: parseInt(process.env.SMTP_PORT || '587'),
@@ -238,6 +233,7 @@ async function sendEmail(to: string | undefined, subject: string, text: string):
       console.log('Email sent:', info.messageId);
       return null;
     } else {
+      /** Development: Use Ethereal test account for preview URLs */
       const testAccount = await nodemailer.createTestAccount();
       const transporter = nodemailer.createTransport({
         host: 'smtp.ethereal.email',
@@ -256,7 +252,7 @@ async function sendEmail(to: string | undefined, subject: string, text: string):
   }
 }
 
-// List bookings (all)
+/** GET /api/v1/bookings: Retrieves all bookings with room details via LEFT JOIN */
 app.get('/api/v1/bookings', async (req: Request, res: Response) => {
   try {
     const q = `
@@ -273,7 +269,13 @@ app.get('/api/v1/bookings', async (req: Request, res: Response) => {
   }
 });
 
-// Booking endpoint with database persistence and conflict detection
+/**
+ * POST /api/v1/bookings: Creates booking with conflict detection & ACID transactions
+ * - Validates date format and logic (end > start)
+ * - Requires authentication (JWT Bearer token mandatory)
+ * - Uses pessimistic locking (FOR UPDATE) to prevent race conditions
+ * - Returns HTTP 409 if room already booked for given dates
+ */
 app.post('/api/v1/bookings', async (req: Request, res: Response) => {
   const client = await pgPool.connect();
   try {
@@ -285,6 +287,7 @@ app.post('/api/v1/bookings', async (req: Request, res: Response) => {
     // Validate dates
     const start = new Date(startDate);
     const end = new Date(endDate);
+    /** Validate date format (YYYY-MM-DD) and logical order */
     if (isNaN(start.getTime()) || isNaN(end.getTime())) {
       return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD' });
     }
@@ -292,9 +295,8 @@ app.post('/api/v1/bookings', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Check-out date must be after check-in date' });
     }
 
-    // Determine user id from Authorization header - REQUIRED
     let userId: string | null = null;
-    const authHeader = (req.headers.authorization || '') as string;
+    const authHeader = (req.headers.authorization || '') as string; // Extract Bearer token
     if (authHeader.startsWith('Bearer ')) {
       const token = authHeader.split(' ')[1];
       try {
@@ -312,12 +314,11 @@ app.post('/api/v1/bookings', async (req: Request, res: Response) => {
         message: 'You must be logged in to make a booking'
       });
     }
-
-    // Start transaction
+    
+    /** Start ACID transaction with pessimistic locking (FOR UPDATE) */
     await client.query('BEGIN');
 
-    // Check for overlapping bookings with pessimistic locking
-    // Overlap condition: (startA < endB) AND (endA > startB)
+    // Query with FOR UPDATE lock to detect overlapping bookings
     const checkQuery = `
       SELECT id FROM bookings 
       WHERE room_id = $1 
@@ -327,10 +328,10 @@ app.post('/api/v1/bookings', async (req: Request, res: Response) => {
       FOR UPDATE;
     `;
     
+    /** Detect overlapping bookings: (startA < endB) AND (endA > startB) with FOR UPDATE lock */
     const conflictResult = await client.query(checkQuery, [roomId, endDate, startDate]);
     
     if (conflictResult.rowCount && conflictResult.rowCount > 0) {
-      // Conflict found - return HTTP 409
       await client.query('ROLLBACK');
       return res.status(409).json({ 
         error: 'Room is already booked for these dates',
@@ -338,7 +339,7 @@ app.post('/api/v1/bookings', async (req: Request, res: Response) => {
       });
     }
 
-    // Insert the new booking
+    /** Insert booking record into database within transaction */
     const insertQuery = `
       INSERT INTO bookings (user_id, room_id, start_date, end_date, status)
       VALUES ($1, $2, $3, $4, 'CONFIRMED')
@@ -347,6 +348,7 @@ app.post('/api/v1/bookings', async (req: Request, res: Response) => {
 
     const result = await client.query(insertQuery, [userId, roomId, startDate, endDate]);
     const booking = result.rows[0];
+    /** Commit transaction - persists booking to database */
     await client.query('COMMIT');
 
     // Attempt to fetch user email to send confirmation (prefer explicit email param)
@@ -360,7 +362,7 @@ app.post('/api/v1/bookings', async (req: Request, res: Response) => {
       }
     }
 
-    // Fetch room details for email
+    /** Fetch room details for personalized confirmation email */
     let roomName = 'Your Room';
     let roomLocation = '';
     try {
@@ -373,7 +375,7 @@ app.post('/api/v1/bookings', async (req: Request, res: Response) => {
       console.warn('Could not fetch room details:', err);
     }
 
-    // Send confirmation email
+    /** Send confirmation email with booking details */
     let emailPreview: string | null = null;
     try {
       emailPreview = await sendEmail(
@@ -402,7 +404,7 @@ Room Booking Team`
       console.error('Email sending failed:', emailErr);
     }
 
-    // Return success message
+    /** Return booking confirmation with optional email preview URL for testing */
     return res.status(200).json({ 
       message: 'Booking successful',
       bookingId: booking.id,
@@ -411,6 +413,7 @@ Room Booking Team`
     });
 
   } catch (error: any) {
+    /** Rollback transaction on error to ensure data consistency */
     try {
       await client.query('ROLLBACK');
     } catch (rollbackErr) {
@@ -423,13 +426,12 @@ Room Booking Team`
   }
 });
 
-// Close (or mark) a booking as CLOSED — only the booking owner may perform this
+/** POST /api/v1/bookings/:id/close: Marks booking as CLOSED (protected route - requires JWT) */
 app.post('/api/v1/bookings/:id/close', verifyToken, async (req: Request, res: Response) => {
   const bookingId = req.params.id;
   const userId = (req as any).userId as string;
 
   try {
-    // Fetch booking and verify owner
     const q = `SELECT id, user_id, room_id, start_date, end_date, status FROM bookings WHERE id = $1`;
     const r = await pgPool.query(q, [bookingId]);
     if (r.rows.length === 0) return res.status(404).json({ error: 'Booking not found' });
@@ -439,7 +441,6 @@ app.post('/api/v1/bookings/:id/close', verifyToken, async (req: Request, res: Re
     const updateQ = `UPDATE bookings SET status = 'CLOSED' WHERE id = $1 RETURNING id, user_id, room_id, start_date, end_date, status`;
     const updated = await pgPool.query(updateQ, [bookingId]);
 
-    // Fetch user email
     let userEmail: string | undefined;
     try {
       const userRes = await pgPool.query('SELECT email FROM users WHERE id = $1', [userId]);
@@ -460,11 +461,10 @@ app.post('/api/v1/bookings/:id/close', verifyToken, async (req: Request, res: Re
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Backend server running on port ${PORT}`);
+  console.log(`✅ Backend server running on port ${PORT} with ACID transactions enabled`);
 });
 
-// Admin: reset DB data (bookings, users, rooms)
-// If ADMIN_SECRET env var is set, caller must provide header `x-admin-secret: <secret>` or body { secret }
+/** POST /api/v1/admin/reset: Truncates all data for clean slate (admin endpoint) */
 app.post('/api/v1/admin/reset', async (req: Request, res: Response) => {
   const provided = (req.headers['x-admin-secret'] as string) || req.body?.secret;
   const adminSecret = process.env.ADMIN_SECRET;
@@ -475,7 +475,6 @@ app.post('/api/v1/admin/reset', async (req: Request, res: Response) => {
   const client = await pgPool.connect();
   try {
     await client.query('BEGIN');
-    // Careful: this removes ALL rooms, users and bookings
     await client.query('TRUNCATE TABLE bookings RESTART IDENTITY CASCADE');
     await client.query('TRUNCATE TABLE users RESTART IDENTITY CASCADE');
     await client.query('TRUNCATE TABLE rooms RESTART IDENTITY CASCADE');
