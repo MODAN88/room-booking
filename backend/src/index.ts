@@ -282,8 +282,18 @@ app.post('/api/v1/bookings', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Determine user id from Authorization header (if present) otherwise fall back to a test user
-    let userId = 'a1b2c3d4-e5f6-7890-1234-567890abcdef';
+    // Validate dates
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD' });
+    }
+    if (end <= start) {
+      return res.status(400).json({ error: 'Check-out date must be after check-in date' });
+    }
+
+    // Determine user id from Authorization header - REQUIRED
+    let userId: string | null = null;
     const authHeader = (req.headers.authorization || '') as string;
     if (authHeader.startsWith('Bearer ')) {
       const token = authHeader.split(' ')[1];
@@ -291,14 +301,44 @@ app.post('/api/v1/bookings', async (req: Request, res: Response) => {
         const decoded: any = jwt.verify(token, JWT_SECRET);
         if (decoded?.userId) userId = decoded.userId;
       } catch (err) {
-        console.warn('Invalid token provided for booking; proceeding with fallback user');
+        console.warn('Invalid token provided for booking');
       }
+    }
+
+    // If no valid user, return error (user must be logged in to book)
+    if (!userId) {
+      return res.status(401).json({ 
+        error: 'Authentication required',
+        message: 'You must be logged in to make a booking'
+      });
     }
 
     // Start transaction
     await client.query('BEGIN');
 
-    // Insert the new booking without any overlap or date restrictions (always allow)
+    // Check for overlapping bookings with pessimistic locking
+    // Overlap condition: (startA < endB) AND (endA > startB)
+    const checkQuery = `
+      SELECT id FROM bookings 
+      WHERE room_id = $1 
+      AND start_date < $2 
+      AND end_date > $3
+      AND status != 'CANCELLED'
+      FOR UPDATE;
+    `;
+    
+    const conflictResult = await client.query(checkQuery, [roomId, endDate, startDate]);
+    
+    if (conflictResult.rowCount && conflictResult.rowCount > 0) {
+      // Conflict found - return HTTP 409
+      await client.query('ROLLBACK');
+      return res.status(409).json({ 
+        error: 'Room is already booked for these dates',
+        conflictingBookings: conflictResult.rows
+      });
+    }
+
+    // Insert the new booking
     const insertQuery = `
       INSERT INTO bookings (user_id, room_id, start_date, end_date, status)
       VALUES ($1, $2, $3, $4, 'CONFIRMED')
@@ -306,6 +346,7 @@ app.post('/api/v1/bookings', async (req: Request, res: Response) => {
     `;
 
     const result = await client.query(insertQuery, [userId, roomId, startDate, endDate]);
+    const booking = result.rows[0];
     await client.query('COMMIT');
 
     // Attempt to fetch user email to send confirmation (prefer explicit email param)
@@ -319,18 +360,62 @@ app.post('/api/v1/bookings', async (req: Request, res: Response) => {
       }
     }
 
-    // Send confirmation email (best-effort)
+    // Fetch room details for email
+    let roomName = 'Your Room';
+    let roomLocation = '';
     try {
-      await sendEmail(userEmail, `Booking Confirmation`, `Your booking is confirmed.\n\nRoom: ${roomId}\nStart: ${startDate}\nEnd: ${endDate}`);
-    } catch (e) {
-      console.warn('Email send failed', e);
+      const roomResult = await pgPool.query('SELECT name, location FROM rooms WHERE id = $1', [roomId]);
+      if (roomResult.rows.length > 0) {
+        roomName = roomResult.rows[0].name;
+        roomLocation = roomResult.rows[0].location;
+      }
+    } catch (err) {
+      console.warn('Could not fetch room details:', err);
     }
 
-    // Return only a simple success message
-    return res.status(200).json({ message: 'Booking successful' });
+    // Send confirmation email
+    let emailPreview: string | null = null;
+    try {
+      emailPreview = await sendEmail(
+        userEmail, 
+        'Room Booking Confirmation - Your Reservation is Confirmed!', 
+        `Dear Guest,
+
+Your room booking has been confirmed!
+
+Booking Details:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Room: ${roomName}
+Location: ${roomLocation}
+Booking ID: ${booking.id}
+Check-in Date: ${startDate}
+Check-out Date: ${endDate}
+Status: CONFIRMED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Thank you for choosing our service!
+
+Best regards,
+Room Booking Team`
+      );
+    } catch (emailErr) {
+      console.error('Email sending failed:', emailErr);
+    }
+
+    // Return success message
+    return res.status(200).json({ 
+      message: 'Booking successful',
+      bookingId: booking.id,
+      emailSent: emailPreview !== null,
+      emailPreviewUrl: emailPreview || null
+    });
 
   } catch (error: any) {
-    await client.query('ROLLBACK');
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackErr) {
+      console.error('Rollback error:', rollbackErr);
+    }
     console.error('Booking error:', error);
     return res.status(500).json({ error: 'Internal server error' });
   } finally {
