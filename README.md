@@ -1,4 +1,5 @@
-# 🏨 Room Booking Platform
+# Room Booking Platform
+Demo video - https://fileport.io/K5E6xJNaHHWv
 
 Enterprise-grade room booking system with **ACID transaction guarantees** and **pessimistic locking** to prevent double-bookings. The platform implements concurrent-safe booking operations using PostgreSQL's row-level locks (FOR UPDATE) within transaction boundaries.
 
